@@ -1,5 +1,7 @@
 # Secure CI/CD Supply Chain Pipeline – API
 
+[![CI](https://github.com/wassimselmi/Secure-CICD-supply-chain-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/wassimselmi/Secure-CICD-supply-chain-pipeline/actions/workflows/ci.yml)
+
 A minimal **Flask REST API** that demonstrates two endpoints and is fully covered by unit tests. It forms the foundation for the Secure CI/CD supply-chain pipeline project.
 
 ---
@@ -112,6 +114,32 @@ docker run -p 5000:5000 secure-api:slim
 
 > **~9× smaller** — from 1.12 GB down to 124 MB.  
 > The slim image also runs as a non-root user with no shell, no pip, and no build tools.
+
+---
+
+## CI/CD Pipeline (GitHub Actions)
+
+Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+
+Three jobs run in sequence on every push/PR to `main`:
+
+```
+lint  ──►  test  ──►  build (Docker)
+```
+
+| Job | What it does | Matrix |
+|-----|-------------|--------|
+| **lint** | Runs `flake8` against `app.py` and `test_app.py` | Python 3.11 & 3.12 |
+| **test** | Runs all unit tests with `unittest` | Python 3.11 & 3.12 |
+| **build** | Multi-stage Docker build + verifies non-root user | — |
+
+### Caching strategy
+
+| Cache | Key |
+|-------|-----|
+| `pip` downloads (lint) | OS + Python version + `requirements*.txt` hash |
+| `pip` downloads (test) | OS + Python version + `requirements.txt` hash |
+| Docker BuildKit layers | OS + commit SHA (with fallback restore) |
 
 ---
 
