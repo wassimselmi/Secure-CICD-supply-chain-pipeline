@@ -1,0 +1,10 @@
+# Naive single-stage image – used only for size comparison.
+# Do NOT use this in production.
+FROM python:3.12
+
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir -r requirements.txt
+
+EXPOSE 5000
+CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=5000"]

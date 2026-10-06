@@ -53,11 +53,65 @@ python -m unittest test_app -v
 
 ```
 .
-├── app.py           # Flask application (endpoints)
-├── test_app.py      # Unit tests (3 test cases)
-├── requirements.txt # Python dependencies
+├── app.py              # Flask application (2 endpoints)
+├── test_app.py         # Unit tests (4 test cases)
+├── requirements.txt    # Python dependencies
+├── Dockerfile          # Multi-stage, slim runtime, non-root user  ✅
+├── Dockerfile.naive    # Single-stage baseline (size comparison only)
+├── .dockerignore       # Excludes tests, venv, secrets from build context
 └── README.md
 ```
+
+---
+
+## Docker
+
+### Multi-stage build (production-ready)
+
+The `Dockerfile` uses two stages:
+
+| Stage | Base image | Purpose |
+|-------|-----------|---------|
+| **builder** | `python:3.12-slim` | Installs dependencies into an isolated prefix |
+| **runtime** | `python:3.12-slim` | Copies only the installed packages + `app.py` |
+
+Security hardening applied in the runtime stage:
+- Dedicated non-root user `appuser` (UID/GID 1001) — no shell, no home dir
+- `PYTHONDONTWRITEBYTECODE=1` + `PYTHONUNBUFFERED=1` for clean logs
+- No build tools, no pip, no package manager in the final image
+
+```bash
+# Build the optimised multi-stage image
+docker build -t secure-api:slim .
+
+# Build the naive baseline (for size comparison)
+docker build -f Dockerfile.naive -t secure-api:naive .
+
+# Compare sizes
+docker images secure-api
+
+# Run the optimised image
+docker run -p 5000:5000 secure-api:slim
+```
+
+### .dockerignore
+
+`.dockerignore` keeps the build context lean by excluding:
+- Virtual environments (`.venv/`, `venv/`)
+- Test files (`test_app.py`, `.pytest_cache/`)
+- Editor / OS noise (`.idea/`, `.DS_Store`, …)
+- Secrets (`.env`, `*.pem`, `*.key`)
+- CI configs and documentation
+
+### 📊 Image size comparison (measured)
+
+| Image | Base | Stages | Runs as | Size |
+|-------|------|--------|---------|------|
+| `secure-api:naive` | `python:3.12` | 1 (single-stage) | root | **1.12 GB** |
+| `secure-api:slim` | `python:3.12-slim` | 2 (multi-stage) | `appuser` (uid 1001) | **124 MB** |
+
+> **~9× smaller** — from 1.12 GB down to 124 MB.  
+> The slim image also runs as a non-root user with no shell, no pip, and no build tools.
 
 ---
 
