@@ -11,7 +11,7 @@ Three tests:
 import json
 import unittest
 
-from app import app, _items
+from app import app
 
 
 class APITestCase(unittest.TestCase):
