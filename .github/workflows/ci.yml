@@ -58,7 +58,57 @@ jobs:
         run: flake8 app.py test_app.py
 
 
-  # ── 2. TEST ────────────────────────────────────────────────────────────────
+  # ── 2. SAST – Semgrep ─────────────────────────────────────────────────────
+  sast:
+    name: SAST – Semgrep
+    runs-on: ubuntu-latest
+    needs: lint          # Only scan when linting passes
+
+    permissions:
+      security-events: write  # Required to upload SARIF to the Security tab
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Install a pinned version of Semgrep so results are reproducible
+      - name: Install Semgrep
+        run: pip install semgrep==1.90.0
+
+      # Run three rule-packs:
+      #   p/python        – Python-specific bugs & anti-patterns
+      #   p/owasp-top-ten – Maps findings to OWASP Top 10 categories
+      #   p/secrets       – Detects hard-coded credentials / API keys
+      #
+      # --severity ERROR  → only surface ERROR-level findings (high severity)
+      # --error           → exit code 1 if ANY finding is found (fails the job)
+      # --sarif           → emit results in SARIF format (industry standard)
+      # --output          → write SARIF to a file for the upload step
+      - name: Run Semgrep scan
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --severity ERROR \
+            --error \
+            --sarif \
+            --output semgrep.sarif \
+            .
+
+      # Upload even when the scan step fails (if: always()) so findings always
+      # appear in the GitHub Security tab → Code scanning alerts
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep   # Groups results under a named tool in the UI
+
+
+  # ── 3. TEST ────────────────────────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -107,7 +157,7 @@ jobs:
   build:
     name: Docker build (slim multi-stage)
     runs-on: ubuntu-latest
-    needs: test          # Only build when all tests pass
+    needs: [test, sast]  # Only build when tests AND security scan pass
 
     steps:
       - name: Checkout source
