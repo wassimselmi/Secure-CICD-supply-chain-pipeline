@@ -131,6 +131,7 @@ jobs:
           context: .
           file: Dockerfile
           push: false          # Set to true + add registry credentials to publish
+          load: true           # Export image into the local Docker daemon so docker run works
           tags: secure-api:slim
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to:   type=local,dest=/tmp/.buildx-cache-new,mode=max
