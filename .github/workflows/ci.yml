@@ -148,4 +148,4 @@ jobs:
             id | grep "uid=1001(appuser)"
 
       - name: Print final image size
-        run: docker images secure-api:slim --format "Image: {{.Repository}}:{{.Tag}}  Size: {{.Size}}"
+        run: docker images secure-api:slim --format "Image {{.Repository}}:{{.Tag}}  Size {{.Size}}"
