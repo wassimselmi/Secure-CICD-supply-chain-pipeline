@@ -77,16 +77,38 @@ jobs:
       - name: Install Semgrep
         run: pip install semgrep==1.90.0
 
-      # Run three rule-packs:
+      # Run three rule-packs across ALL severity levels so every finding
+      # appears in the GitHub Security tab (WARNING, INFO, ERROR alike).
+      # No --error here — this step is purely for visibility.
       #   p/python        – Python-specific bugs & anti-patterns
-      #   p/owasp-top-ten – Maps findings to OWASP Top 10 categories
-      #   p/secrets       – Detects hard-coded credentials / API keys
-      #
-      # --severity ERROR  → only surface ERROR-level findings (high severity)
-      # --error           → exit code 1 if ANY finding is found (fails the job)
-      # --sarif           → emit results in SARIF format (industry standard)
-      # --output          → write SARIF to a file for the upload step
-      - name: Run Semgrep scan
+      #   p/owasp-top-ten – Maps findings to OWASP Top 10 categories (WARNING+)
+      #   p/secrets       – Detects hard-coded credentials / API keys (WARNING+)
+      - name: Run Semgrep scan (all severities → SARIF)
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --sarif \
+            --output semgrep.sarif \
+            .
+        # Don't fail here — we control failure in the enforcement step below
+
+      # Upload SARIF regardless of what happens next so all findings are always
+      # visible in GitHub Security → Code scanning alerts
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep   # Groups results under a named tool in the UI
+
+      # Re-run scoped to ERROR severity only.
+      # --severity ERROR → only match rules tagged severity: ERROR (high)
+      # --error          → exit code 1 if any such finding exists → fails job
+      # This is separate from the SARIF scan so WARNING/INFO findings are
+      # still visible in the Security tab but do NOT break the build.
+      - name: Enforce – fail on high-severity (ERROR) findings
         run: |
           semgrep scan \
             --config p/python \
@@ -94,18 +116,7 @@ jobs:
             --config p/secrets \
             --severity ERROR \
             --error \
-            --sarif \
-            --output semgrep.sarif \
             .
-
-      # Upload even when the scan step fails (if: always()) so findings always
-      # appear in the GitHub Security tab → Code scanning alerts
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: semgrep.sarif
-          category: semgrep   # Groups results under a named tool in the UI
 
 
   # ── 3. TEST ────────────────────────────────────────────────────────────────
