@@ -185,7 +185,7 @@ jobs:
       # --ignore-unfixed  → skip vulns that have no fix yet (reduces noise)
       # --format sarif    → machine-readable output for the Security tab
       - name: Run Trivy (filesystem – dependencies)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -259,7 +259,7 @@ jobs:
       # --vuln-type       → check both OS packages and language libraries
       # --format sarif    → machine-readable output for the Security tab
       - name: Run Trivy (image – OS & library CVEs)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: secure-api:slim
