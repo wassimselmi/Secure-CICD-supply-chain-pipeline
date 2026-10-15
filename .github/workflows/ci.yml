@@ -254,21 +254,25 @@ jobs:
 
       # Scan the freshly-built image for OS-package and library CVEs.
       # Must run after the build step so the image exists in the local daemon.
-      # --exit-code 1     → fail on CRITICAL or HIGH CVEs
-      # --ignore-unfixed  → skip unfixed CVEs to avoid noise from upstream delays
-      # --vuln-type       → check both OS packages and language libraries
-      # --format sarif    → machine-readable output for the Security tab
-      - name: Run Trivy (image – OS & library CVEs)
+      # Step 1: full scan → SARIF (all severities, no exit-code so it always
+      #         completes and SARIF can be uploaded to the Security tab).
+      # Step 2: enforcement scan → fail only on CRITICAL/HIGH with a fix available.
+      # Splitting mirrors the Semgrep pattern above and ensures:
+      #   • All findings are always visible in the Security tab.
+      #   • Unfixed CVEs (no upstream patch yet) do NOT break the build.
+      - name: Run Trivy (image – SARIF report, all severities)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: secure-api:slim
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-          ignore-unfixed: true
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: '0'          # Never fails — this step is for visibility only
           vuln-type: os,library
           format: sarif
           output: trivy-image.sarif
+          trivyignores: ''
+        env:
+          TRIVY_SKIP_VERSION_CHECK: "true"   # Suppress the "newer version" notice
 
       # Upload image scan SARIF separately from the filesystem scan
       # (different category = separate group in the Security tab)
@@ -278,3 +282,18 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
+
+      # Step 2: enforcement — fail the build only when a CRITICAL or HIGH CVE
+      # has a fix available. Unfixed CVEs are skipped to reduce noise.
+      - name: Enforce – fail on fixable CRITICAL/HIGH image CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: secure-api:slim
+          severity: CRITICAL,HIGH
+          exit-code: '1'          # Non-zero exit → fails the job
+          ignore-unfixed: true    # Only count CVEs that have an upstream fix
+          vuln-type: os,library
+          format: table           # Human-readable output in the job log
+        env:
+          TRIVY_SKIP_VERSION_CHECK: "true"   # Suppress the "newer version" notice
