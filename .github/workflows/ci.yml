@@ -232,14 +232,43 @@ jobs:
           restore-keys: |
             buildx-${{ runner.os }}-
 
+      # Compute image tags before building so build-push-action can push in one shot.
+      # Rules:
+      #   • Always tag with the full 40-char commit SHA  → immutable, traceable
+      #   • Also tag with the branch name (main, develop) → human-friendly pointer
+      #   • 'latest' is intentionally omitted to prevent accidental overwrites
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=branch
+          # Examples of tags produced:
+          #   ghcr.io/org/repo:sha-a1b2c3d4...  ← immutable per-commit tag
+          #   ghcr.io/org/repo:main              ← mutable branch pointer
+
+      # Log in to GHCR using the auto-generated GITHUB_TOKEN (no secret setup needed).
+      # The token is scoped to this repo and expires when the job ends.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build slim image (multi-stage, non-root)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: false          # Set to true + add registry credentials to publish
-          load: true           # Export image into the local Docker daemon so docker run works
-          tags: secure-api:slim
+          push: true           # Push to GHCR using the tags computed above
+          load: true           # Also export to local daemon for Verify + Trivy steps
+          tags: |
+            secure-api:slim
+            ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to:   type=local,dest=/tmp/.buildx-cache-new,mode=max
 
@@ -281,6 +310,14 @@ jobs:
           syft secure-api:slim \
             --output spdx-json=sbom.spdx.json
         # spdx-json satisfies NTIA minimum-element requirements
+
+      # Print a human-readable package table directly in the job log.
+      # This gives instant visibility without downloading the JSON artifact.
+      # Columns: name, version, type (deb / python / etc.), location in image.
+      - name: Print SBOM summary (table)
+        run: |
+          echo "### SBOM package summary for secure-api:slim"
+          syft secure-api:slim --output table
 
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
