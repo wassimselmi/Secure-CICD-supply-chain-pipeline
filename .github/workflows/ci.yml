@@ -258,16 +258,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build locally only — push:false avoids buildx trying to authenticate
+      # to Docker Hub for the unqualified 'secure-api:slim' local alias.
+      # GHCR push happens in a dedicated step AFTER all verification/scanning.
       - name: Build slim image (multi-stage, non-root)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: true           # Push to GHCR using the tags computed above
-          load: true           # Also export to local daemon for Verify + Trivy steps
-          tags: |
-            secure-api:slim
-            ${{ steps.meta.outputs.tags }}
+          push: false          # Local only at this point
+          load: true           # Export into the local Docker daemon
+          tags: secure-api:slim
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to:   type=local,dest=/tmp/.buildx-cache-new,mode=max
@@ -374,3 +375,21 @@ jobs:
           format: table           # Human-readable output in the job log
         env:
           TRIVY_SKIP_VERSION_CHECK: "true"   # Suppress the "newer version" notice
+
+      # ── Push to GHCR ───────────────────────────────────────────────────────
+      # Push ONLY after the image has passed verification, SBOM generation,
+      # and the Trivy CVE enforcement gate. This guarantees nothing reaches
+      # the registry until it has been fully vetted.
+      # docker/metadata-action produced two tags stored in steps.meta.outputs.tags
+      # (one SHA tag + one branch tag). We iterate over them and push each.
+      - name: Tag and push to GitHub Container Registry
+        run: |
+          # Read the newline-separated list of GHCR tags and push each one.
+          echo "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "Tagging secure-api:slim → $tag"
+            docker tag secure-api:slim "$tag"
+            docker push "$tag"
+          done
+          echo "Pushed tags:"
+          echo "${{ steps.meta.outputs.tags }}"
