@@ -1,1 +1,12 @@
+# ⚠️  DELIBERATELY VULNERABLE — vuln-test branch only
+#
+# cryptography==38.0.0
+#   CVE-2023-23931  CRITICAL  CVSS 9.1
+#   Bleichenbacher timing oracle attack on RSA decryption.
+#   Fixed in: cryptography >= 39.0.1
+#
+# This package is intentionally pinned to an old, known-bad version to verify
+# that the Trivy SCA gate (trivy-fs job) and image scan gate (build job) both
+# detect and block it. DO NOT merge this to main.
 flask>=3.0.0
+cryptography==38.0.0
