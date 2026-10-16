@@ -214,7 +214,14 @@ jobs:
       security-events: write  # Required to upload SARIF to the Security tab
       actions: read
       contents: read
-      packages: write          # Required to attest/publish the SBOM artifact
+      packages: write          # Push & attest to GHCR
+      id-token: write          # Required for GitHub OIDC → keyless Cosign signing
+
+    outputs:
+      # Export the image digest so the verify job can sign/verify by digest,
+      # not by mutable tag. Digest is set in the 'Capture image digest' step.
+      image-digest: ${{ steps.digest.outputs.digest }}
+      image-repo:   ${{ steps.digest.outputs.repo }}
 
     steps:
       - name: Checkout source
@@ -377,14 +384,10 @@ jobs:
           TRIVY_SKIP_VERSION_CHECK: "true"   # Suppress the "newer version" notice
 
       # ── Push to GHCR ───────────────────────────────────────────────────────
-      # Push ONLY after the image has passed verification, SBOM generation,
-      # and the Trivy CVE enforcement gate. This guarantees nothing reaches
-      # the registry until it has been fully vetted.
-      # docker/metadata-action produced two tags stored in steps.meta.outputs.tags
-      # (one SHA tag + one branch tag). We iterate over them and push each.
+      # Push ONLY after the image has cleared every gate (verify, SBOM, Trivy).
+      # The GHCR tags were computed earlier by docker/metadata-action.
       - name: Tag and push to GitHub Container Registry
         run: |
-          # Read the newline-separated list of GHCR tags and push each one.
           echo "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
             [ -z "$tag" ] && continue
             echo "Tagging secure-api:slim → $tag"
@@ -393,3 +396,88 @@ jobs:
           done
           echo "Pushed tags:"
           echo "${{ steps.meta.outputs.tags }}"
+
+      # ── Sign with Cosign (keyless, GitHub OIDC) ────────────────────────────
+      # Keyless signing means NO long-lived keys are stored anywhere.
+      # Cosign exchanges the GitHub OIDC token for a short-lived Fulcio cert,
+      # records the signature in the Rekor transparency log, and attaches it
+      # to the image in GHCR as an OCI artifact.
+      # We ALWAYS sign by digest (not tag) so the signature is immutable.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        # Installs the cosign binary; version is pinned by the action release.
+
+      - name: Capture image digest
+        id: digest
+        run: |
+          # Resolve the SHA-tagged image to its content-addressable digest.
+          # We use the sha- tag (immutable) produced by docker/metadata-action.
+          SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep 'sha-' | head -1)
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$SHA_TAG" 2>/dev/null || \
+                   docker inspect --format='{{index .RepoDigests 0}}' secure-api:slim)
+          # DIGEST is of the form ghcr.io/org/repo@sha256:abc123...
+          REPO=$(echo "$DIGEST" | cut -d@ -f1)
+          HASH=$(echo "$DIGEST" | cut -d@ -f2)
+          echo "digest=$HASH"   >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO"     >> "$GITHUB_OUTPUT"
+          echo "Full digest ref: $DIGEST"
+
+      - name: Sign image with Cosign (keyless)
+        env:
+          # Cosign reads the OIDC token automatically from the GitHub Actions
+          # environment when COSIGN_EXPERIMENTAL is not needed (cosign >= 2.x).
+          COSIGN_YES: "true"   # Equivalent to --yes; skips interactive prompt
+        run: |
+          REPO="${{ steps.digest.outputs.repo }}"
+          DIGEST="${{ steps.digest.outputs.digest }}"
+          echo "Signing ${REPO}@${DIGEST}"
+          cosign sign "${REPO}@${DIGEST}"
+          echo "✅ Signature recorded in Rekor transparency log."
+
+
+  # ── 6. VERIFY SIGNATURE ────────────────────────────────────────────────────
+  # Separate job so that verification happens in a clean environment with no
+  # access to the build job's intermediate state. This proves the signature is
+  # independently verifiable by anyone — not just the build machine.
+  verify-signature:
+    name: Verify Cosign image signature
+    runs-on: ubuntu-latest
+    needs: build          # Must run after build has signed and pushed
+
+    permissions:
+      contents: read
+      packages: read       # Read the image from GHCR to verify its signature
+      id-token: write      # Needed by Cosign to fetch the OIDC token for verification
+
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Verify that:
+      #   1. A valid Cosign signature exists on the image digest.
+      #   2. The signature certificate was issued by Fulcio
+      #      (https://fulcio.sigstore.dev).
+      #   3. The OIDC subject matches THIS workflow's ref — not any other
+      #      workflow or caller.
+      # If any check fails, cosign verify exits non-zero and the job fails.
+      - name: Verify image signature
+        env:
+          REPO:   ${{ needs.build.outputs.image-repo }}
+          DIGEST: ${{ needs.build.outputs.image-digest }}
+        run: |
+          echo "Verifying ${REPO}@${DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp \
+              "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/" \
+            --certificate-oidc-issuer \
+              "https://token.actions.githubusercontent.com" \
+            "${REPO}@${DIGEST}" \
+            | jq .
+          echo "✅ Signature verified. Image is authentic and unmodified."
